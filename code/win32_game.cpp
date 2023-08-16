@@ -1,5 +1,7 @@
 #include <windows.h>
-
+#include <stdint.h>
+//EndTime = 40:30/ 1:34:02
+//Handmade Hero 004
 //I usually use NULL is i don't specifically care about a varible but is required by the computer or when i have to cancel/end something
 #define LOG(x) OutputDebugStringA(x)
 
@@ -7,13 +9,25 @@
 #define LOCAL_PERSIST static
 #define GLOBAL_VARIABLE static
 
+typedef uint8_t uint8;
+typedef uint16_t uint16;
+typedef uint32_t uint32;
+typedef uint64_t uint64;
+
+typedef int8_t int8;
+typedef int16_t int16;
+typedef int32_t int32;
+typedef int64_t int64;
+
+
+
 //Variable to check if our window is running
 GLOBAL_VARIABLE bool Running; 
 
 GLOBAL_VARIABLE BITMAPINFO BitmapInfo;
-GLOBAL_VARIABLE void *BitmapMemoryPtr; 	 //Area of memory where we can draw with our own renderer
-GLOBAL_VARIABLE HBITMAP BitmapHandle;    //Handle to bitmap
-GLOBAL_VARIABLE HDC BitmapDeviceContext;
+GLOBAL_VARIABLE void *BitmapMemory; 	 //Ptr to Area of memory where we can draw with our own renderer
+GLOBAL_VARIABLE int BitmapWidth;
+GLOBAL_VARIABLE int BitmapHeight;
 
 
 //Stride = After how many bytes do we encounter the next element
@@ -21,33 +35,75 @@ GLOBAL_VARIABLE HDC BitmapDeviceContext;
 INTERNAL void W64ResizeDIBSection(int width, int height){
 	//TODO: Try to not free bitmap memory first but after the a new bitmap has been created
 
-	if(BitmapHandle != NULL)
-	{
-		DeleteObject(BitmapHandle);
+	if(BitmapMemory){
+		VirtualFree(BitmapMemory,NULL, //Knows how we allocated frees itself
+					MEM_RELEASE);
 	}
-	if(BitmapDeviceContext == NULL)
-	{
-		BitmapDeviceContext = CreateCompatibleDC(0);
-	}
+
+	BitmapWidth = width;
+	BitmapHeight = height;
 
 	BitmapInfo.bmiHeader.biSize = sizeof(BitmapInfo.bmiHeader); // So that BitmapInfo struct can skip that many bytes to get to colors
-	BitmapInfo.bmiHeader.biWidth = width;
-	BitmapInfo.bmiHeader.biHeight = height;
-	BitmapInfo.bmiHeader.biPlanes = 1;
+	BitmapInfo.bmiHeader.biWidth = BitmapWidth;
+	BitmapInfo.bmiHeader.biHeight = -BitmapHeight; // negative value means that our bitmap is layed top to bottom origin at the upper left
+	BitmapInfo.bmiHeader.biPlanes = 1;	
 	BitmapInfo.bmiHeader.biBitCount = 32; //Bits per pixel 32 = 4bytes per pixel
+	BitmapInfo.bmiHeader.biCompression = BI_RGB;
 
+	//Allocating our own memory
+	int BytesPerPixel = 4;
+	int BitmapMemorySize = (width * height) * BytesPerPixel;	//Total number of pixels * Bytes per pixel 
+	BitmapMemory = VirtualAlloc(
+				 NULL,  //Don't care where its allocated
+				 BitmapMemorySize, //Size of allocated memory
+				 MEM_COMMIT, 
+				 PAGE_READWRITE //Access
+				);
+	int Pitch = width * BytesPerPixel;
+	uint8 *Row = (uint8*)(BitmapMemory); //This basically makes it so that we read 8bits of memory | Offset = 8 ---------> PointerArithmetic
+	for(int Y = 0; Y < BitmapHeight; Y++)
+	{
+		uint8 *Pixel = (uint8*) Row;      //makes it so each increment is of [4 BYTES]
+		for(int X = 0; X < BitmapWidth; X++)
+		{
+			//One byte is used for color in memory
+			//This is how is setup in Memory
+			//This is set up as Little Endian Which means the values are reverse BGR
+			//-----------------------------------------------------------------------
+			//			  PADDING		BLUE		GREEN		  RED
+			//Offset:   (Pixel + 0)  (Pixel + 1)  (Pixel + 2)  (Pixel + 3)
+			//Hex: 			00 			 00 		  00 		   00
+			//-----------------------------------------------------------------------
+			//LittleEndian:  0xXXBBGGRR --------> 32 bit Address in hexadecimal
 
-	 //Area of memory where we can draw with our own renderer
-	BitmapHandle = CreateDIBSection(BitmapDeviceContext, &BitmapInfo, DIB_RGB_COLORS, &BitmapMemoryPtr, 0, 0);
+			*Pixel = (uint8)X*X + Y*Y;
+			Pixel++;
+
+			*Pixel = (uint8)Y;
+			Pixel++;
+
+			*Pixel = (uint8)X*X;
+			Pixel++;
+
+			*Pixel = (uint8)0;
+			Pixel++;
+
+		}
+		Row = Row + Pitch;
+	}
 }
 
 //Put rectangle from one buffer to another buffer  
 //Scaling as well as updating 
-INTERNAL void W64UpdateScreen(HDC DeviceContext,int X, int Y, int Width, int Height){
+INTERNAL void W64UpdateScreen(HDC DeviceContext,RECT *WindowRect, int X, int Y, int Width, int Height){
+	int WindowWidth = WindowRect->right - WindowRect->left;
+	int WindowHeight = WindowRect->bottom - WindowRect->top;
 	StretchDIBits(DeviceContext,
-				  X, Y, Width, Height,
-				  X, Y, Width, Height,
-				  BitmapMemoryPtr,
+				//  X, Y, Width, Height,
+				//  X, Y, Width, Height,
+				  0,0,BitmapWidth,BitmapHeight,
+				  0,0,WindowWidth,WindowHeight,
+				  BitmapMemory,
 				  &BitmapInfo, 
 				  DIB_RGB_COLORS,
 				  SRCCOPY
@@ -80,12 +136,11 @@ W64MainWindowCallback(
 			int Width = Paint.rcPaint.right - Paint.rcPaint.left;
 			LOCAL_PERSIST DWORD mode = BLACKNESS;
 			PatBlt(DeviceContext, X, Y, Width, Height, mode);
-			if(mode == BLACKNESS)
-				mode = WHITENESS;
-			else
-				mode = BLACKNESS;
-			W64UpdateScreen(DeviceContext, X, Y, Width, Height);
-			
+
+			RECT ClientRect;
+			GetClientRect(Window, &ClientRect);
+			W64UpdateScreen(DeviceContext, &ClientRect, X, Y, Width, Height);
+
 			//DrawFocusRect(DeviceContext, &Rectangle);
 			EndPaint(Window, &Paint);
  
@@ -173,14 +228,11 @@ WinMain(
 				else {
 					break;
 				}
-
 			}
 		}
 	}
 	else
-	{
 		LOG("FAILED\n");
-	}
 
 	return 0;
 }
